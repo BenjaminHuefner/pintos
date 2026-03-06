@@ -93,6 +93,10 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
 
+    /* Owned by timer.c. */
+    int64_t wakeup_tick;                /**< Tick to wake up on. */
+    struct list_elem sleep_elem;         /**< List element for sleeping threads list. */
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /**< Page directory. */
