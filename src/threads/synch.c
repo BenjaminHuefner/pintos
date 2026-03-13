@@ -32,6 +32,10 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+
+static bool thread_higher_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+static bool cond_sema_higher_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
 /** Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -48,6 +52,15 @@ sema_init (struct semaphore *sema, unsigned value)
 
   sema->value = value;
   list_init (&sema->waiters);
+}
+
+bool
+thread_higher_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
+{
+  const struct thread *thread_a = list_entry (a, struct thread, elem);
+  const struct thread *thread_b = list_entry (b, struct thread, elem);
+
+  return thread_a->effectivePriority > thread_b->effectivePriority;
 }
 
 /** Down or "P" operation on a semaphore.  Waits for SEMA's value
@@ -68,7 +81,8 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      // list_push_back (&sema->waiters, &thread_current ()->elem);
+      list_insert_ordered(&sema->waiters, &thread_current ()->elem, thread_higher_priority, NULL);
       thread_block ();
     }
   sema->value--;
@@ -113,10 +127,10 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
+  sema->value++;
   if (!list_empty (&sema->waiters)) 
     thread_unblock (list_entry (list_pop_front (&sema->waiters),
                                 struct thread, elem));
-  sema->value++;
   intr_set_level (old_level);
 }
 
@@ -251,6 +265,7 @@ struct semaphore_elem
   {
     struct list_elem elem;              /**< List element. */
     struct semaphore semaphore;         /**< This semaphore. */
+    int priority;                      /**< Priority of the waiting thread. */
   };
 
 /** Initializes condition variable COND.  A condition variable
@@ -262,6 +277,16 @@ cond_init (struct condition *cond)
   ASSERT (cond != NULL);
 
   list_init (&cond->waiters);
+}
+
+static bool
+cond_sema_higher_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
+{
+  struct semaphore_elem *sa = list_entry (a, struct semaphore_elem, elem);
+  struct semaphore_elem *sb = list_entry (b, struct semaphore_elem, elem);
+
+  /* No more list_front! Compare the saved priority values. */
+  return sa->priority > sb->priority;
 }
 
 /** Atomically releases LOCK and waits for COND to be signaled by
@@ -295,7 +320,11 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  list_push_back (&cond->waiters, &waiter.elem);
+
+  waiter.priority = thread_get_priority ();
+
+  list_insert_ordered (&cond->waiters, &waiter.elem, cond_sema_higher_priority, NULL);
+
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
