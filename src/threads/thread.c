@@ -253,6 +253,14 @@ thread_unblock (struct thread *t)
   // list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   
+  if (thread_current () != idle_thread && 
+      thread_current ()->effectivePriority < t->effectivePriority)
+    {
+      if (intr_context ()) 
+        intr_yield_on_return ();
+      else
+        thread_yield ();
+    }
 
   intr_set_level (old_level);
 }
@@ -351,7 +359,12 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  if(thread_current() == idle_thread)
+    return;
+  int old_priority = thread_current()->effectivePriority;
   thread_current ()->effectivePriority = new_priority;
+  if(new_priority < old_priority)
+    thread_yield();
 }
 
 /** Returns the current thread's priority. */
