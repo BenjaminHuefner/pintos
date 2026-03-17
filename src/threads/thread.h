@@ -97,6 +97,9 @@ struct thread
     /* Owned by timer.c. */
     int64_t wakeup_tick;                /**< Tick to wake up on. */
     struct list_elem sleep_elem;         /**< List element for sleeping threads list. */
+    struct list donor_list;           /**< List of threads donating priority to this thread. */
+    struct list_elem donor_elem;              /**< List element for donor list. */  
+    struct lock *waiting_lock;              /**< The lock that the thread is currently waiting on, if any. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

@@ -362,8 +362,21 @@ thread_set_priority (int new_priority)
   if(thread_current() == idle_thread)
     return;
   int old_priority = thread_current()->effectivePriority;
-  thread_current ()->effectivePriority = new_priority;
-  if(new_priority < old_priority)
+  enum intr_level old_level;
+
+  old_level = intr_disable ();
+  thread_current ()->originalPriority = new_priority;
+  int curr_max_priority= new_priority;
+  struct list_elem *max_donor_priority_element = list_min(&thread_current()->donor_list, thread_higher_priority, NULL);
+  if(max_donor_priority_element != list_end(&thread_current()->donor_list)){
+    struct thread *max_donor_thread = list_entry(max_donor_priority_element, struct thread, donor_elem);
+    if(max_donor_thread->effectivePriority > curr_max_priority)
+      curr_max_priority = max_donor_thread->effectivePriority;
+  }
+  thread_current()->effectivePriority = curr_max_priority;
+  intr_set_level (old_level);
+
+  if(thread_current()->effectivePriority < old_priority)
     thread_yield();
 }
 
@@ -492,6 +505,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->originalPriority = priority;
   t->effectivePriority = priority;
+  list_init(&t->donor_list);
+  t->waiting_lock = NULL;
+
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -522,8 +538,10 @@ next_thread_to_run (void)
 {
   if (list_empty (&ready_list))
     return idle_thread;
-  else
+  else{
+    list_sort(&ready_list, thread_higher_priority, NULL);
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  }
 }
 
 /** Completes a thread switch by activating the new thread's page

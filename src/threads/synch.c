@@ -81,8 +81,8 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      // list_push_back (&sema->waiters, &thread_current ()->elem);
-      list_insert_ordered(&sema->waiters, &thread_current ()->elem, thread_higher_priority, NULL);
+      list_push_back (&sema->waiters, &thread_current ()->elem);
+      // list_insert_ordered(&sema->waiters, &thread_current ()->elem, thread_higher_priority, NULL);
       thread_block ();
     }
   sema->value--;
@@ -128,9 +128,11 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   sema->value++;
-  if (!list_empty (&sema->waiters)) 
+  if (!list_empty (&sema->waiters)){
+    list_sort(&sema->waiters, thread_higher_priority, NULL);
     thread_unblock (list_entry (list_pop_front (&sema->waiters),
                                 struct thread, elem));
+  }
   intr_set_level (old_level);
 }
 
@@ -206,11 +208,33 @@ lock_init (struct lock *lock)
 void
 lock_acquire (struct lock *lock)
 {
+  enum intr_level old_level;
+
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  
+  struct thread *donating_thread = thread_current();
+  donating_thread->waiting_lock = lock;
+  struct lock *next_lock = lock;
+  
+  old_level = intr_disable ();
+  if(next_lock->holder != NULL)
+    list_push_back(&next_lock->holder->donor_list, &donating_thread->donor_elem);
+  for(int i = 0; i < 8; i++){
+    if(next_lock==NULL || next_lock->holder == NULL)
+      break;
+    if(next_lock->holder->effectivePriority < donating_thread->effectivePriority)
+      next_lock->holder->effectivePriority = donating_thread->effectivePriority;
+    next_lock = next_lock->holder->waiting_lock;
+
+  }
+
   sema_down (&lock->semaphore);
+  intr_set_level (old_level);
+  donating_thread = thread_current();
+  donating_thread->waiting_lock = NULL;
   lock->holder = thread_current ();
 }
 
@@ -242,11 +266,38 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
+  enum intr_level old_level;
+
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
   lock->holder = NULL;
+
+  old_level = intr_disable ();
+    struct thread *current_thread = thread_current();
+    int old_priority = current_thread->effectivePriority;
+    int current_max_priority = current_thread->originalPriority;
+    struct list_elem *e = list_begin(&current_thread->donor_list);
+    while(e != list_end(&current_thread->donor_list)){
+      struct thread *donor_thread = list_entry(e, struct thread, donor_elem);
+      if(donor_thread->waiting_lock == lock){
+        e = list_remove(e);
+      }
+      else{
+        if(donor_thread->effectivePriority > current_max_priority)
+        {
+          current_max_priority = donor_thread->effectivePriority;
+        }
+        e= list_next(e);
+      }
+    }
+
   sema_up (&lock->semaphore);
+  if(current_thread->effectivePriority != current_max_priority)
+    current_thread->effectivePriority = current_max_priority;
+  if(current_thread->effectivePriority < old_priority)
+    thread_yield();
+  intr_set_level (old_level);
 }
 
 /** Returns true if the current thread holds LOCK, false
@@ -323,7 +374,8 @@ cond_wait (struct condition *cond, struct lock *lock)
 
   waiter.priority = thread_get_priority ();
 
-  list_insert_ordered (&cond->waiters, &waiter.elem, cond_sema_higher_priority, NULL);
+  // list_insert_ordered (&cond->waiters, &waiter.elem, cond_sema_higher_priority, NULL);
+  list_push_back (&cond->waiters, &waiter.elem);
 
   lock_release (lock);
   sema_down (&waiter.semaphore);
@@ -345,9 +397,11 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
+  if (!list_empty (&cond->waiters)){
+    list_sort(&cond->waiters, cond_sema_higher_priority, NULL);
     sema_up (&list_entry (list_pop_front (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
+  }
 }
 
 /** Wakes up all threads, if any, waiting on COND (protected by
