@@ -40,7 +40,7 @@ static bool earlier_wakeup (const struct list_elem *a, const struct list_elem *b
 void
 timer_init (void) 
 {
-  list_init (&sleep_list);
+  list_init (&sleep_list); /* Initializes the sleep list to keep track of sleeping threads */
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
 }
@@ -90,8 +90,8 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
-bool
-earlier_wakeup (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
+bool /* this function is used to determine the order of threads in the sleep list */
+earlier_wakeup (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) /** Returns true if thread_a should wake up before thread_b */
 {
   const struct thread *thread_a = list_entry (a, struct thread, sleep_elem);
   const struct thread *thread_b = list_entry (b, struct thread, sleep_elem);
