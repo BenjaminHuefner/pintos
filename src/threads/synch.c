@@ -295,9 +295,13 @@ lock_release (struct lock *lock)
   sema_up (&lock->semaphore);
   if(current_thread->effectivePriority != current_max_priority)
     current_thread->effectivePriority = current_max_priority; /* Updates effective priority if necessary */
-  if(current_thread->effectivePriority < old_priority)
+  if(current_thread->effectivePriority < old_priority){
+    intr_set_level (old_level);
     thread_yield(); /* Yields the CPU if the current thread's effective priority has decreased, allowing higher priority threads to run instead */
-  intr_set_level (old_level);
+  }
+  else{
+    intr_set_level (old_level);
+  }
 }
 
 /** Returns true if the current thread holds LOCK, false

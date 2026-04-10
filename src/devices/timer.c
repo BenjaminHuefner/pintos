@@ -112,12 +112,13 @@ timer_sleep (int64_t ticks)
   currentThread->wakeup_tick = end; /* Sets the thread's wakeup tick to the end tick */
   // printf("Current thread wakeup tick set to: %"PRId64"\n", currentThread->wakeup_tick);
 
-  intr_disable(); /* Disables interrupts because thread_block() must be called with interrupts off and to prevent race conditions */
+  enum intr_level old_level=intr_disable(); /* Disables interrupts because thread_block() must be called with interrupts off and to prevent race conditions */
   list_insert_ordered(&sleep_list, &currentThread->sleep_elem, earlier_wakeup, NULL); /* Inserts the thread into the sleep list in order of wakeup tick */
   // printf("Thread inserted into sleep list\n");
   // printf("Sleep list head wakeup tick: %"PRId64"\n", list_entry(list_front(&sleep_list), struct thread, sleep_elem)->wakeup_tick);
   thread_block(); /* Blocks the thread until it is unblocked by the timer interrupt handler when the wakeup tick is reached */
 
+  intr_set_level (old_level); /* Re-enables interrupts */
   // ASSERT (intr_get_level () == INTR_ON);
   // while (timer_elapsed (start) < ticks) 
   //   thread_yield ();
