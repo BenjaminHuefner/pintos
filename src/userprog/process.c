@@ -20,6 +20,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static void init_stack(char *fn_tokenized, char *process_name, char *sp);
 
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -29,29 +30,66 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
-  char *fn_name;
+  char *fn_tokenized;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  fn_name = palloc_get_page (0);
-  if (fn_copy == NULL || fn_name == NULL)
+  fn_tokenized = palloc_get_page (0);
+  if (fn_copy == NULL || fn_tokenized == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
-  strlcpy (fn_name, file_name, PGSIZE);
+  strlcpy (fn_tokenized, file_name, PGSIZE);
 
-  char *process_name, *save_ptr;
-  process_name = strtok_r (fn_name, " ", &save_ptr);
-  
+  char *process_name;
+  init_stack(fn_tokenized, process_name, NULL);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (process_name, PRI_DEFAULT, start_process, fn_copy);
-  palloc_free_page (fn_name);
-
+  palloc_free_page (fn_tokenized);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
+}
+
+static void
+push_to_stack(char *token, char *sp){
+  size_t token_length = strlen(token) + 1; // +1 for null terminator
+  sp -= token_length; // Move stack pointer down by token length
+  memcpy(sp, token, token_length); // Copy token to stack
+}
+
+static void
+init_stack(char *fn_tokenized, char *process_name, char *sp){
+  char *save_ptr, *token;
+  int argc = 1;
+  process_name = strtok_r (fn_tokenized, " ", &save_ptr);
+  for (token = strtok_r (NULL, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+    argc++;
+  }
+
+  char *argv[argc];
+  int current_arg_save = 0;
+  for (token = strtok_r (fn_tokenized, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+    push_to_stack(token, sp);
+    argv[current_arg_save] = sp; // Store the address of the token on the stack in argv
+    current_arg_save++;
+  }
+
+  for(int word_align = 0; word_align < 4 - ((int) sp % 4); word_align++){
+    push_to_stack(NULL, sp); // Push padding bytes to ensure word alignment
+  }
+
+  push_to_stack(NULL, sp); // Push a null pointer to terminate the argv array
+  for (int current_arg_address = argc - 1; current_arg_address >= 0; current_arg_address--){
+    push_to_stack(argv[current_arg_address], sp); // Push the address of each token onto the stack
+  }
+
+  push_to_stack(sp, sp); // Push the address of argv (which is now at the top of the stack) onto the stack
+  push_to_stack(argc, sp); // Push argc onto the stack
+  push_to_stack(NULL, sp); // Push a fake return address onto the stack
+
 }
 
 /** A thread function that loads a user process and starts it
