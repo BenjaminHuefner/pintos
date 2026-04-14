@@ -29,17 +29,26 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *fn_name;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  fn_name = palloc_get_page (0);
+  if (fn_copy == NULL || fn_name == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_name, file_name, PGSIZE);
+
+  char *process_name, *save_ptr;
+  process_name = strtok_r (fn_name, " ", &save_ptr);
+  
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (process_name, PRI_DEFAULT, start_process, fn_copy);
+  palloc_free_page (fn_name);
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -97,7 +106,7 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
-
+  printf("%s: exit(%d)\n", cur->name, cur->exit_status); /* Print the process's name and exit status to the console */
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;

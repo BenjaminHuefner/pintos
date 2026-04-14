@@ -14,6 +14,12 @@ enum thread_status
     THREAD_DYING        /**< About to be destroyed. */
   };
 
+enum exit_status
+  {
+    EXIT_ERROR = -1,      /**< The process exited with an error. */
+    EXIT_SUCCESS = 0,     /**< The process exited successfully. */
+  };
+
 /** Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
@@ -85,6 +91,7 @@ struct thread
     /* Owned by thread.c. */
     tid_t tid;                          /**< Thread identifier. */
     enum thread_status status;          /**< Thread state. */
+    enum exit_status exit_status;          /**< Thread exit status. */
     char name[16];                      /**< Name (for debugging purposes). */
     uint8_t *stack;                     /**< Saved stack pointer. */
     int effectivePriority;              /**< Effective Priority. */
