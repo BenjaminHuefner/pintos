@@ -17,10 +17,26 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void init_stack(char *fn_tokenized, char *process_name, char *sp);
+
+/* Global lock for serializing load() file-system activity. */
+static struct lock load_lock;
+static bool load_lock_inited = false;
+
+static void
+ensure_load_lock_init (void)
+{
+  enum intr_level old_level = intr_disable ();
+  if (!load_lock_inited)
+    {
+      lock_init (&load_lock);
+      load_lock_inited = true;
+    }
+  intr_set_level (old_level);
+}
 
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -33,17 +49,24 @@ process_execute (const char *file_name)
   char *fn_tokenized;
   tid_t tid;
 
+  ensure_load_lock_init ();
+
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  fn_tokenized = palloc_get_page (0);
-  if (fn_copy == NULL || fn_tokenized == NULL)
+  if (fn_copy == NULL)
     return TID_ERROR;
+  fn_tokenized = palloc_get_page (0);
+  if (fn_tokenized == NULL){
+      palloc_free_page (fn_copy);
+      return TID_ERROR;
+    }
   strlcpy (fn_copy, file_name, PGSIZE);
   strlcpy (fn_tokenized, file_name, PGSIZE);
 
   char *process_name;
-  init_stack(fn_tokenized, process_name, NULL);
+  char *save_ptr;
+  process_name = strtok_r (fn_tokenized, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (process_name, PRI_DEFAULT, start_process, fn_copy);
@@ -54,42 +77,75 @@ process_execute (const char *file_name)
 }
 
 static void
-push_to_stack(char *token, char *sp){
+push_string_to_stack(char *token, char **sp){
   size_t token_length = strlen(token) + 1; // +1 for null terminator
-  sp -= token_length; // Move stack pointer down by token length
-  memcpy(sp, token, token_length); // Copy token to stack
+  *sp -= token_length; // Move stack pointer down by token length
+  memcpy(*sp, token, token_length); // Copy token to stack
 }
 
 static void
-init_stack(char *fn_tokenized, char *process_name, char *sp){
+push_pointer_to_stack(void *token, char **sp){
+  *sp -= sizeof(char *); // Move stack pointer down by size of a pointer
+  if(token != NULL){
+    memcpy(*sp, &token, sizeof(char *)); // Copy the pointer to the stack
+  }
+  else{
+    memset(*sp, 0, sizeof(char *)); // If token is NULL, push a null pointer onto the stack
+  }
+}
+
+static void
+push_int_to_stack(int token, char **sp){
+  *sp -= sizeof(int); // Move stack pointer down by size of an int
+  memcpy(*sp, &token, sizeof(int)); // Copy the int to the stack
+}
+
+static void
+push_byte_to_stack(uint8_t token, char **sp){
+  *sp -= sizeof(uint8_t); // Move stack pointer down by size of a byte
+  memset(*sp, 0, sizeof(uint8_t)); // Push a null byte onto the stack
+}
+
+bool
+init_stack(char *fn_tokenized, char **sp){
   char *save_ptr, *token;
-  int argc = 1;
-  process_name = strtok_r (fn_tokenized, " ", &save_ptr);
-  for (token = strtok_r (NULL, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+  int argc = 0;
+  char *fn_calc_argc;
+  fn_calc_argc = palloc_get_page (0);
+  if (fn_calc_argc == NULL){
+      return false;
+    }
+  strlcpy (fn_calc_argc, fn_tokenized, PGSIZE);
+
+  for (token = strtok_r (fn_calc_argc, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
     argc++;
   }
+
+  palloc_free_page (fn_calc_argc);
 
   char *argv[argc];
   int current_arg_save = 0;
   for (token = strtok_r (fn_tokenized, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
-    push_to_stack(token, sp);
-    argv[current_arg_save] = sp; // Store the address of the token on the stack in argv
+    push_string_to_stack(token, sp);
+    argv[current_arg_save] = *sp; // Store the address of the token on the stack in argv
     current_arg_save++;
   }
 
-  for(int word_align = 0; word_align < 4 - ((int) sp % 4); word_align++){
-    push_to_stack(NULL, sp); // Push padding bytes to ensure word alignment
+  int padding_bytes = (4 - ((int) *sp % 4)) % 4; // Calculate padding needed for word alignment
+  for(int word_align = 0; word_align < padding_bytes; word_align++){
+    push_byte_to_stack(0, sp); // Push padding bytes to ensure word alignment
   }
 
-  push_to_stack(NULL, sp); // Push a null pointer to terminate the argv array
+  push_pointer_to_stack(NULL, sp); // Push a null pointer to terminate the argv array
   for (int current_arg_address = argc - 1; current_arg_address >= 0; current_arg_address--){
-    push_to_stack(argv[current_arg_address], sp); // Push the address of each token onto the stack
+    push_pointer_to_stack(argv[current_arg_address], sp); // Push the address of each token onto the stack
   }
 
-  push_to_stack(sp, sp); // Push the address of argv (which is now at the top of the stack) onto the stack
-  push_to_stack(argc, sp); // Push argc onto the stack
-  push_to_stack(NULL, sp); // Push a fake return address onto the stack
+  push_pointer_to_stack(*sp, sp); // Push the address of argv (which is now at the top of the stack) onto the stack
+  push_int_to_stack(argc, sp); // Push argc onto the stack
+  push_pointer_to_stack(NULL, sp); // Push a fake return address onto the stack
 
+  return true;
 }
 
 /** A thread function that loads a user process and starts it
@@ -106,7 +162,14 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
+  ensure_load_lock_init ();
+  lock_acquire (&load_lock);
   success = load (file_name, &if_.eip, &if_.esp);
+  lock_release (&load_lock);
+
+  if(success)
+    success = init_stack(file_name, &if_.esp); /* Initializes the stack with the command-line arguments */
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
