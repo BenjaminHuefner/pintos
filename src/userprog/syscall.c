@@ -75,14 +75,14 @@ syscall_handler (struct intr_frame *f)
         break;
 
       case SYS_EXIT:
-        sys_exit ((int) copy_in_u32 ((const uint8_t *)(f->esp + 4)));
+        sys_exit ((int) copy_in_u32 (f->esp + 4));
         break;
       
       case SYS_WRITE:
       {
-        int fd = (int) copy_in_u32 ((const uint8_t *)(f->esp + 4));
-        const void *buffer = (const void *) copy_in_u32 ((const uint8_t *)(f->esp + 8));
-        unsigned size = (unsigned) copy_in_u32 ((const uint8_t *)(f->esp + 12));
+        int fd = (int) copy_in_u32 (f->esp + 4);
+        const void *buffer = (const void *) copy_in_u32 (f->esp + 8);
+        unsigned size = (unsigned) copy_in_u32 (f->esp + 12);
         validate_user_range (buffer, size); /* buffer must be readable */
         f->eax = syscall_write (fd, buffer, size);
         break;

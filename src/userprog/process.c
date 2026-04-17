@@ -22,21 +22,6 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-/* Global lock for serializing load() file-system activity. */
-static struct lock load_lock;
-static bool load_lock_inited = false;
-
-static void
-ensure_load_lock_init (void)
-{
-  enum intr_level old_level = intr_disable ();
-  if (!load_lock_inited)
-    {
-      lock_init (&load_lock);
-      load_lock_inited = true;
-    }
-  intr_set_level (old_level);
-}
 
 struct child_proc
   {
@@ -106,7 +91,6 @@ process_execute (const char *file_name)
   tid_t tid;
   struct child_proc *cp;
 
-  ensure_load_lock_init ();
   ensure_child_init ();
 
   /* Make a copy of FILE_NAME.
@@ -248,10 +232,8 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  ensure_load_lock_init ();
-  lock_acquire (&load_lock);
+  
   success = load (process_name, &if_.eip, &if_.esp);
-  lock_release (&load_lock);
 
   if (success){
     success = init_stack (file_name, &if_.esp);
