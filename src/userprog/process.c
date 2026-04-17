@@ -93,35 +93,41 @@ process_execute (const char *file_name)
 
   ensure_child_init ();
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
+
   fn_tokenized = palloc_get_page (0);
-  if (fn_tokenized == NULL){
+  if (fn_tokenized == NULL)
+    {
       palloc_free_page (fn_copy);
       return TID_ERROR;
     }
+
   strlcpy (fn_copy, file_name, PGSIZE);
   strlcpy (fn_tokenized, file_name, PGSIZE);
+
+  /* Pre-allocate child record before creating the thread.
+     This avoids cleanup races if allocation fails later. */
+  cp = palloc_get_page (0);
+  if (cp == NULL)
+    {
+      palloc_free_page (fn_tokenized);
+      palloc_free_page (fn_copy);
+      return TID_ERROR;
+    }
 
   char *process_name;
   char *save_ptr;
   process_name = strtok_r (fn_tokenized, " ", &save_ptr);
 
-  /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (process_name, PRI_DEFAULT, start_process, fn_copy);
   palloc_free_page (fn_tokenized);
-  if (tid == TID_ERROR){
-    palloc_free_page (fn_copy); 
-    return TID_ERROR;
-  }
 
-  cp = palloc_get_page (0);
-  if (cp == NULL)
+  if (tid == TID_ERROR)
     {
       palloc_free_page (fn_copy);
+      palloc_free_page (cp);
       return TID_ERROR;
     }
 
